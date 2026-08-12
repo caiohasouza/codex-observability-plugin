@@ -132,6 +132,9 @@ export type EventMsgPayload = {
   item?: { type?: string; content?: MessageContentPart[] } | null;
   /** collab_agent_spawn_end */
   new_thread_id?: string | null;
+  /** sub_agent_activity */
+  kind?: string;
+  agent_thread_id?: string | null;
   /** mcp_tool_call_begin / mcp_tool_call_end */
   invocation?: { server?: string; tool?: string; arguments?: unknown } | null;
   /** web_search_end */
