@@ -1,4 +1,5 @@
 import { LangfuseSpanProcessor } from "@langfuse/otel";
+import { setLangfuseTracerProvider } from "@langfuse/tracing";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 
 import type { Config } from "./config.js";
@@ -36,6 +37,9 @@ export function setupInstrumentation(config: Config): Instrumentation {
     spanProcessors: [spanProcessor],
   });
   provider.register();
+
+  // Bind explicitly: the global registry can refuse the registration silently.
+  setLangfuseTracerProvider(provider);
 
   return {
     shutdown: async () => {
