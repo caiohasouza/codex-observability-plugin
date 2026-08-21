@@ -45,6 +45,7 @@ export function setupInstrumentation(config: Config): Instrumentation {
     shutdown: async () => {
       await spanProcessor.forceFlush();
       await provider.shutdown();
+      setLangfuseTracerProvider(null);
     },
   };
 }

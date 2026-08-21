@@ -46555,6 +46555,7 @@ function setupInstrumentation(config$1) {
 	return { shutdown: async () => {
 		await spanProcessor.forceFlush();
 		await provider.shutdown();
+		setLangfuseTracerProvider(null);
 	} };
 }
 

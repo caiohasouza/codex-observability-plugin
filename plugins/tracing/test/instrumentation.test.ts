@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { setLangfuseTracerProvider } from "@langfuse/tracing";
+import { getLangfuseTracerProvider, setLangfuseTracerProvider } from "@langfuse/tracing";
 import type { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -90,5 +90,14 @@ describe("setupInstrumentation", () => {
 
     const root = captured.find((s) => s.name === "Codex Turn");
     expect(root, "the turn span never reached the plugin's span processor").toBeDefined();
+  });
+
+  it("releases the provider on shutdown", async () => {
+    const instrumentation = setupInstrumentation(baseConfig);
+    const bound = getLangfuseTracerProvider();
+
+    await instrumentation.shutdown();
+
+    expect(getLangfuseTracerProvider()).not.toBe(bound);
   });
 });
