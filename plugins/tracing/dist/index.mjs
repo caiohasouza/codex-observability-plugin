@@ -46738,7 +46738,7 @@ function parseSession(lines) {
 					const s = ensureStep(ts);
 					if (text) s.text = s.text ? `${s.text}\n${text}` : text;
 				} else if (msg.role === "user" && text) {
-					if (!turn.userInputFallback && !/^<(environment_context|user_instructions)/.test(text.trim())) turn.userInputFallback = text;
+					if (!turn.userInputFallback && !/<\/?(environment_context|user_instructions)\b/.test(text) && !/^# AGENTS\.md instructions for\b/.test(text.trim())) turn.userInputFallback = text;
 				}
 			} else if (p.type === "function_call") {
 				const call = p;
@@ -46822,6 +46822,9 @@ function parseSession(lines) {
 			ensureTurn(ts);
 			if (et === "user_message" && typeof p.message === "string") {
 				if (!turn.userInput) turn.userInput = p.message;
+			} else if (et === "item_completed" && p.item?.type === "UserMessage") {
+				const text = extractMessageText(p.item.content);
+				if (text && !turn.userInput) turn.userInput = text;
 			} else if (et === "agent_message" && typeof p.message === "string") turn.lastAgentMessage = p.message;
 			else if (et === "token_count") {
 				if (p.info?.total_token_usage) turn.totalUsage = p.info.total_token_usage;
