@@ -125,6 +125,14 @@ export function parseSession(lines: RolloutLine[]): {
   const ensureTurn = (ts: number): MutableTurn => (turn ??= newTurn(ts));
   const ensureStep = (ts: number) => (step ??= newStep(ts));
 
+  // Rollouts from the transition period can carry both spawn-event formats
+  // for the same child; the thread must be nested exactly once.
+  const recordSubagentThread = (threadId: string) => {
+    if (!turn!.subagentThreadIds.includes(threadId)) {
+      turn!.subagentThreadIds.push(threadId);
+    }
+  };
+
   const closeStep = (ts: number, usage?: TokenUsage) => {
     if (!step) return;
     step.endTime = Math.max(step.endTime, ts);
@@ -195,11 +203,12 @@ export function parseSession(lines: RolloutLine[]): {
           const s = ensureStep(ts);
           if (text) s.text = s.text ? `${s.text}\n${text}` : text;
         } else if (msg.role === "user" && text) {
-          // Codex injects <environment_context>/<user_instructions> as user
-          // messages; keep only the first that does not look like wrapper XML.
+          // Codex concatenates injected context into user messages; the block
+          // may start with an AGENTS.md preamble, so match the elements anywhere.
           if (
             !turn!.userInputFallback &&
-            !/^<(environment_context|user_instructions)/.test(text.trim())
+            !/<\/?(environment_context|user_instructions)\b/.test(text) &&
+            !/^# AGENTS\.md instructions for\b/.test(text.trim())
           ) {
             turn!.userInputFallback = text;
           }
@@ -295,6 +304,11 @@ export function parseSession(lines: RolloutLine[]): {
 
       if (et === "user_message" && typeof p.message === "string") {
         if (!turn!.userInput) turn!.userInput = p.message;
+      } else if (et === "item_completed" && p.item?.type === "UserMessage") {
+        // The structured item carries the bare prompt; the `response_item`
+        // copy may be concatenated with injected context.
+        const text = extractMessageText(p.item.content);
+        if (text && !turn!.userInput) turn!.userInput = text;
       } else if (et === "agent_message" && typeof p.message === "string") {
         turn!.lastAgentMessage = p.message;
       } else if (et === "token_count") {
@@ -308,7 +322,18 @@ export function parseSession(lines: RolloutLine[]): {
         // A subagent spawn records the child thread *and* (since it carries a
         // call_id ending in "_end") enriches the spawning tool call below.
         if (et === "collab_agent_spawn_end" && typeof p.new_thread_id === "string") {
-          turn!.subagentThreadIds.push(p.new_thread_id);
+          recordSubagentThread(p.new_thread_id);
+        }
+        // Codex multi-agent v2 persists the spawn as sub_agent_activity
+        // instead. Only kind "started" marks a spawn — "interacted" and
+        // "interrupted" reference an existing child and would nest it under
+        // the wrong (later) turn.
+        if (
+          et === "sub_agent_activity" &&
+          p.kind === "started" &&
+          typeof p.agent_thread_id === "string"
+        ) {
+          recordSubagentThread(p.agent_thread_id);
         }
         // MCP tool calls are function calls with a mangled name
         // (`server__tool`); the begin/end events carry the clean server/tool

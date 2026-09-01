@@ -69,8 +69,6 @@ describe("parseSession", () => {
     expect(turn.completed).toBe(true);
     expect(turn.aborted).toBe(true);
     expect(turn.userInput).toBe("Spawn a subagent to tell a joke");
-
-    // The spawn is recorded as a subagent thread...
     expect(turn.subagentThreadIds).toEqual(["thread-child"]);
 
     // ...and the failing exec is captured with its error.
@@ -79,6 +77,57 @@ describe("parseSession", () => {
     expect(failing?.error).toBe("command failed");
     expect(turn.startTime).toBe(Date.parse("2026-06-03T11:00:01.000Z"));
     expect(turn.endTime).toBe(Date.parse("2026-06-03T11:00:05.000Z"));
+  });
+
+  it("records subagent threads from sub_agent_activity, ignoring non-started kinds", () => {
+    const event = (ts: string, payload: Record<string, unknown>): RolloutLine => ({
+      timestamp: ts,
+      type: "event_msg",
+      payload: { ...payload },
+    });
+    const lines: RolloutLine[] = [
+      { timestamp: "2026-06-03T13:00:00.000Z", type: "session_meta", payload: { id: "s" } },
+      event("2026-06-03T13:00:01.000Z", { type: "task_started", turn_id: "t" }),
+      event("2026-06-03T13:00:02.000Z", {
+        type: "sub_agent_activity",
+        event_id: "c1",
+        agent_thread_id: "thread-a",
+        agent_path: "/root/worker",
+        kind: "started",
+      }),
+      // The same spawn reported again — legacy format and a repeated activity.
+      event("2026-06-03T13:00:02.100Z", {
+        type: "collab_agent_spawn_end",
+        call_id: "c1",
+        new_thread_id: "thread-a",
+      }),
+      event("2026-06-03T13:00:02.200Z", {
+        type: "sub_agent_activity",
+        event_id: "c1",
+        agent_thread_id: "thread-a",
+        agent_path: "/root/worker",
+        kind: "started",
+      }),
+      // Later lifecycle kinds reference an existing child and must not register.
+      event("2026-06-03T13:00:03.000Z", {
+        type: "sub_agent_activity",
+        event_id: "c2",
+        agent_thread_id: "thread-b",
+        agent_path: "/root/other",
+        kind: "interacted",
+      }),
+      event("2026-06-03T13:00:03.100Z", {
+        type: "sub_agent_activity",
+        event_id: "c3",
+        agent_thread_id: "thread-c",
+        agent_path: "/root/other",
+        kind: "interrupted",
+      }),
+      event("2026-06-03T13:00:04.000Z", { type: "task_complete", turn_id: "t" }),
+    ];
+    const { turns } = parseSession(lines);
+    expect(turns).toHaveLength(1);
+    expect(turns[0].subagentThreadIds).toEqual(["thread-a"]);
   });
 
   it("treats a trailing, never-completed turn as not completed", () => {
@@ -250,5 +299,41 @@ describe("parseSession", () => {
     expect(tool.name).toBe("apply_patch");
     expect(tool.args).toBe("*** Begin Patch");
     expect(tool.output).toBe("patched");
+  });
+});
+
+describe("user prompt extraction", () => {
+  it("prefers the structured UserMessage over the injected context block", () => {
+    const { turns } = parseSession(loadFixture("rollout-agents-preamble-main.jsonl"));
+
+    expect(turns).toHaveLength(1);
+    expect(turns[0]!.userInput).toBe("sag mal hallo");
+    expect(turns[0]!.userInput).not.toContain("AGENTS.md instructions");
+  });
+
+  it("keeps a prompt that merely mentions the wrapper tags", () => {
+    // Only the structured item can rescue this prompt: the fallback rejects
+    // any text containing the wrapper elements.
+    const prompt = "why does <environment_context> appear in my traces?";
+    const lines = loadFixture("rollout-agents-preamble-main.jsonl").map((line) =>
+      JSON.stringify(line).includes("sag mal hallo")
+        ? (JSON.parse(JSON.stringify(line).replaceAll("sag mal hallo", prompt)) as RolloutLine)
+        : line,
+    );
+
+    expect(parseSession(lines).turns[0]!.userInput).toBe(prompt);
+  });
+
+  it("rejects an AGENTS.md-prefixed wrapper in the fallback path", () => {
+    // Older CLIs emit no structured user item; drop it from the fixture.
+    const lines = loadFixture("rollout-agents-preamble-main.jsonl").filter(
+      (line) =>
+        !(
+          line.type === "event_msg" && (line.payload as { type?: string }).type === "item_completed"
+        ),
+    );
+    const { turns } = parseSession(lines);
+
+    expect(turns[0]!.userInput).toBe("sag mal hallo");
   });
 });
