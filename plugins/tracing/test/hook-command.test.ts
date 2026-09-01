@@ -19,11 +19,17 @@ function makeTempDir(prefix: string): string {
   return dir;
 }
 
-function readHookCommand(): string {
-  const config = JSON.parse(fs.readFileSync(hookConfigFile, "utf-8")) as {
-    hooks: { Stop: Array<{ hooks: Array<{ command: string }> }> };
-  };
-  return config.hooks.Stop[0].hooks[0].command;
+type HookConfig = {
+  hooks: Record<string, Array<{ hooks: Array<{ command: string }> }> | undefined>;
+};
+
+function readHookCommand(event: "Stop" | "SessionEnd" = "Stop"): string {
+  const config = JSON.parse(fs.readFileSync(hookConfigFile, "utf-8")) as HookConfig;
+  const group = config.hooks[event];
+  if (!group?.[0]?.hooks?.[0]?.command) {
+    throw new Error(`hooks.json has no ${event} hook command`);
+  }
+  return group[0].hooks[0].command;
 }
 
 function readPluginVersion(): string {
@@ -112,5 +118,47 @@ describe("bundled Stop hook command", () => {
     expect(readHookCommand()).toContain(
       `/plugins/cache/codex-observability-plugin/tracing/${readPluginVersion()}/dist/index.mjs`,
     );
+  });
+});
+
+describe("bundled SessionEnd hook command", () => {
+  // The Stop hook fires after every turn, but Codex appends `task_complete` for
+  // that turn *after* the hook reads the rollout, so the trailing turn is
+  // deferred (see `convertRollout`). Nothing re-runs after the last turn, so
+  // without a SessionEnd hook the final turn of every session is never
+  // exported — and a single-turn session produces no trace at all.
+  //
+  // Codex flushes the transcript before dispatching SessionEnd ("failed to
+  // flush transcript before SessionEnd hook"), so the trailing turn is complete
+  // by the time this hook runs. The sidecar ledger keeps it exactly-once.
+  it("is declared so the deferred trailing turn still gets exported", () => {
+    expect(() => readHookCommand("SessionEnd")).not.toThrow();
+  });
+
+  it("runs the same bundle as the Stop hook", () => {
+    expect(readHookCommand("SessionEnd")).toBe(readHookCommand("Stop"));
+  });
+
+  it("runs from an arbitrary session cwd", async () => {
+    const codexHome = makeTempDir("lf-codex-home-");
+    const sessionCwd = makeTempDir("lf-codex-cwd-");
+    stageInstalledPlugin(codexHome);
+
+    const { code, stderr, stdout } = await runShellCommand(readHookCommand("SessionEnd"), {
+      cwd: sessionCwd,
+      env: {
+        ...process.env,
+        CODEX_HOME: codexHome,
+        HOME: codexHome,
+      },
+      input: JSON.stringify({
+        hook_event_name: "SessionEnd",
+        transcript_path: path.join(sessionCwd, "rollout.jsonl"),
+      }),
+    });
+
+    expect(code).toBe(0);
+    expect(stdout).toBe("");
+    expect(stderr).toBe("");
   });
 });
